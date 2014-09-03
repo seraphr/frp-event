@@ -1,0 +1,28 @@
+*.class
+*.log
+
+# sbt specific
+.history
+dist/*
+target/
+bin/
+lib_managed/
+src_managed/
+project/boot/
+project/plugins/project/
+
+# Scala-IDE specific
+.scala_dependencies
+.classpath
+.project
+
+# project output
+.cache
+
+# CDT specific
+*/native/Release
+*/native/Debug
+
+# Eclilpse specific
+.settings
+.metadata
