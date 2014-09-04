@@ -185,6 +185,13 @@ case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, 
           f.onFailure(new RuntimeException("Left Queue is Full"))
         }
       }
+
+      override def onComplete() = {
+        if (mIsAvailable) {
+          mIsAvailable = false
+          f.onComplete()
+        }
+      }
     })
 
     right.subscribe(new DelegateSubscriber[R](f) {
@@ -194,6 +201,13 @@ case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, 
         } else {
           mIsAvailable = false
           f.onFailure(new RuntimeException("Right Queue is Full"))
+        }
+      }
+
+      override def onComplete() = {
+        if (mIsAvailable) {
+          mIsAvailable = false
+          f.onComplete()
         }
       }
     })
@@ -224,6 +238,7 @@ case class TakedEvent[T](underlying: Event[T], p: T => Boolean) extends Event[T]
         f.onComplete()
       }
     },
+    aOnComplete = () => if (mIsAvailable) { mIsAvailable = false; f.onComplete() },
     aOnFailure = f.onFailure)
 }
 

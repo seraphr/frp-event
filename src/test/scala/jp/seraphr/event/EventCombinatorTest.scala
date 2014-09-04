@@ -17,6 +17,18 @@ class EventCombinatorTest extends FlatSpec with Matchers {
     tBuffer.toList should be(List(20, 40))
   }
 
+  "mapped event" should "be completed when underlying event is completed" in {
+    val tSource = new GenericEventSource[Int]
+    val tEvent = tSource.map(_ * 2)
+    var tCompleted = false
+    tEvent.subscribe(_ => (), aOnComplete = () => tCompleted = true)
+
+    tCompleted should be(false)
+    tSource.complete()
+    tCompleted should be(true)
+
+  }
+
   "flatten" should "create new Event that enable latest Event" in {
     val tOuter = new GenericEventSource[Event[Int]]
     val tInner1 = new GenericEventSource[Int]
@@ -39,6 +51,44 @@ class EventCombinatorTest extends FlatSpec with Matchers {
     tInner2.emit(24)
 
     tBuffer.toList should be(List(11, 12, 23, 24))
+  }
+
+  "flatten event" should "be completed when OuterEvent and last InnerEvent are completed" in {
+    val tOuter = new GenericEventSource[Event[Int]]
+    val tInner1 = new GenericEventSource[Int]
+    val tInner2 = new GenericEventSource[Int]
+
+    val tFlattenEvent = tOuter.flatten
+    var tCompleted = false
+    tFlattenEvent.subscribe(_ => (), () => tCompleted = true)
+
+    tOuter.emit(tInner1)
+    tInner1.complete()
+    tOuter.emit(tInner2)
+
+    tOuter.complete()
+    tCompleted should be(false)
+    tInner2.complete()
+    tCompleted should be(true)
+  }
+
+  "flatten event" should "be completed when last InnerEvent and OuterEvent are completed" in {
+    val tOuter = new GenericEventSource[Event[Int]]
+    val tInner1 = new GenericEventSource[Int]
+    val tInner2 = new GenericEventSource[Int]
+
+    val tFlattenEvent = tOuter.flatten
+    var tCompleted = false
+    tFlattenEvent.subscribe(_ => (), () => tCompleted = true)
+
+    tOuter.emit(tInner1)
+    tInner1.complete()
+    tOuter.emit(tInner2)
+
+    tInner2.complete()
+    tCompleted should be(false)
+    tOuter.complete()
+    tCompleted should be(true)
   }
 
   "flatMap" should "create new Event that emit Mapped and Flatten values" in {
@@ -83,7 +133,8 @@ class EventCombinatorTest extends FlatSpec with Matchers {
     val tSource = new GenericEventSource[Int]
     val tBuffer = new ArrayBuffer[Int]
     val tEvent = tSource.filter(_ % 2 == 0)
-    tEvent.subscribe(tBuffer += _)
+    var tIsCompleted = false
+    tEvent.subscribe(tBuffer += _, () => tIsCompleted = true)
 
     tSource.emit(1)
     tSource.emit(2)
@@ -95,6 +146,10 @@ class EventCombinatorTest extends FlatSpec with Matchers {
     tSource.emit(8)
 
     tBuffer.toList should be(List(2, 4, 6, 8))
+
+    tIsCompleted should be(false)
+    tSource.complete()
+    tIsCompleted should be(true)
   }
 
   "or" should "create new Event that emit Either values" in {
@@ -102,7 +157,8 @@ class EventCombinatorTest extends FlatSpec with Matchers {
     val tSource2 = new GenericEventSource[Int]
     val tBuffer = new ArrayBuffer[Either[String, Int]]
     val tEvent = tSource1 or tSource2
-    tEvent.subscribe(tBuffer += _)
+    var tIsCompleted = false
+    tEvent.subscribe(tBuffer += _, () => tIsCompleted = true)
 
     tSource1.emit("hoge")
     tSource1.emit("fuga")
@@ -114,6 +170,11 @@ class EventCombinatorTest extends FlatSpec with Matchers {
     val tExpected = List(Left("hoge"), Left("fuga"), Right(10), Left("piyo"), Right(20), Right(30))
 
     tBuffer.toList should be(tExpected)
+
+    tSource1.complete()
+    tIsCompleted should be(false)
+    tSource2.complete()
+    tIsCompleted should be(true)
   }
 
   "merge" should "create new Event that emit both Event values" in {
@@ -139,7 +200,8 @@ class EventCombinatorTest extends FlatSpec with Matchers {
     val tSource2 = new GenericEventSource[String]
     val tBuffer = new ArrayBuffer[(Int, String)]
     val tEvent = tSource1 zip tSource2
-    tEvent.subscribe(tBuffer += _)
+    var tCompleteCount = 0
+    tEvent.subscribe(tBuffer += _, () => tCompleteCount += 1)
 
     tSource1.emit(1)
     tSource1.emit(2)
@@ -149,6 +211,14 @@ class EventCombinatorTest extends FlatSpec with Matchers {
 
     val tExpected = List((1, "hoge"), (2, "fuga"))
     tBuffer.toList should be(tExpected)
+
+    tSource1.complete()
+    tCompleteCount should be(1)
+    tSource2.emit("piyo")
+    tBuffer.toList should be(tExpected)
+    tSource1.complete()
+    tSource2.complete()
+    tCompleteCount should be(1)
   }
 
   "sliding" should """create new Event that emit grouped values in fixed size blocks by passing a "sliding window"""" in {
@@ -209,14 +279,17 @@ class EventCombinatorTest extends FlatSpec with Matchers {
     val tSource = new GenericEventSource[Int]
     val tBuffer = new ArrayBuffer[Int]
     val tEvent = tSource.take(5)
-    tEvent.subscribe(tBuffer += _)
+    var tCompleted = false
+    tEvent.subscribe(tBuffer += _, () => tCompleted = true)
 
     tSource.emit(1)
     tSource.emit(2)
     tSource.emit(3)
     tSource.emit(4)
     tSource.emit(5)
+    tCompleted should be(false)
     tSource.emit(6)
+    tCompleted should be(true)
     tSource.emit(7)
     tSource.emit(8)
     tSource.emit(9)
