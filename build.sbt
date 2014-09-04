@@ -19,6 +19,7 @@ val COMMON_SETTINGS = Seq(
   testOptions in ScoverageTest += Tests.Argument("-oS", "-u", "target/junit"),
   EclipseKeys.withSource := true,
   EclipseKeys.withJavadoc := true,
+  EclipseKeys.eclipseOutput := Some(".eclipseTarget"),
   EclipseKeys.createSrc := EclipseCreateSrc.Default + EclipseCreateSrc.Resource,
   libraryDependencies ++= COMMON_DEPENDENCIES
 ) ++ ScoverageSbtPlugin.instrumentSettings
