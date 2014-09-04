@@ -134,6 +134,23 @@ class EventCombinatorTest extends FlatSpec with Matchers {
     tBuffer.toList should be(tExpected)
   }
 
+  "zip" should "create new Event that emit Tupled values" in {
+    val tSource1 = new GenericEventSource[Int]
+    val tSource2 = new GenericEventSource[String]
+    val tBuffer = new ArrayBuffer[(Int, String)]
+    val tEvent = tSource1 zip tSource2
+    tEvent.subscribe(tBuffer += _)
+
+    tSource1.emit(1)
+    tSource1.emit(2)
+    tSource2.emit("hoge")
+    tSource1.emit(4)
+    tSource2.emit("fuga")
+
+    val tExpected = List((1, "hoge"), (2, "fuga"))
+    tBuffer.toList should be(tExpected)
+  }
+
   "sliding" should """create new Event that emit grouped values in fixed size blocks by passing a "sliding window"""" in {
     val tSource = new GenericEventSource[Int]
     val tBuffer = new ArrayBuffer[List[Int]]

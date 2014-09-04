@@ -19,8 +19,9 @@ class TimerEvent[+T](aPeriodMillis: Long, aValue: T) extends Event[T] {
 
   def stop(): this.type = {
     mTimer.cancel()
+    mSource.complete()
     this
   }
 
-  override def subscribe(aSubscriber: T => Unit) = mSource.subscribe(aSubscriber)
+  override def subscribe[U >: T](aSubscriber: Subscriber[U]) = mSource.subscribe(aSubscriber)
 }

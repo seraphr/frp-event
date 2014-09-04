@@ -34,4 +34,23 @@ class GenericEventSourceTest extends FlatSpec with Matchers {
     tSource.emit(11)
     tBuffer should have size 1
   }
+
+  "complete" should "fire onComplete" in {
+    val tSource = new GenericEventSource[Int]
+    val tBuffer = new ArrayBuffer[Int]
+    val tEvent = tSource.event
+    var tCompleted = false
+    tEvent.subscribe(tBuffer += _, aOnComplete = () => tCompleted = true)
+
+    tSource.emit(1)
+    tSource.emit(2)
+
+    tCompleted should be(false)
+    tSource.complete()
+    tCompleted should be(true)
+
+    tSource.emit(3)
+
+    tBuffer.toList should be(List(1, 2))
+  }
 }
