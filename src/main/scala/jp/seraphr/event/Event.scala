@@ -61,9 +61,6 @@ case class FlattenEvent[T](underlying: Event[Event[T]]) extends Event[T] {
   private[this] var mOuterIsComplete = false
   private[this] var mInnerIsComplete = false
 
-  //   e =>
-  //    mLastObserver.foreach(_.dispose())
-  //    mLastObserver = Some(e.subscribe(g))
   override def subscribe[U >: T](g: Subscriber[U]): Observer = underlying.subscribe(new Subscriber[Event[T]] {
     def onNext(aObj: Event[T]): Unit = {
       mLastObserver.foreach(_.dispose())
@@ -111,7 +108,7 @@ case class OrEvent[T, U](e1: Event[T], e2: Event[U]) extends Event[Either[T, U]]
       g.onComplete()
     }
 
-    tObserver.isAvailable
+    tObserver
 
     val tOb1 = e1.subscribe(new DelegateSubscriber[T](g) {
       override def onNext(l: T) = g(Left(l))
@@ -156,7 +153,7 @@ case class MergedEvent[T](e1: Event[T], e2: Event[T]) extends Event[T] {
       g.onComplete()
     }
 
-    tObserver.isAvailable
+    tObserver
 
     new Observer {
       override def isAvailable = tOb1.isAvailable && tOb2.isAvailable
