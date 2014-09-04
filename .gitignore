@@ -26,3 +26,4 @@ project/plugins/project/
 # Eclilpse specific
 .settings
 .metadata
+/.eclipseTarget
