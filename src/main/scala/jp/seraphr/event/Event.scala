@@ -57,26 +57,31 @@ case class MappedEvent[S, T](underlying: Event[S], f: S => T) extends Event[T] {
 }
 
 case class FlattenEvent[T](underlying: Event[Event[T]]) extends Event[T] {
+  private[this] val mSync = new AnyRef
   private[this] var mLastObserver: Option[Observer] = None
+  @volatile
   private[this] var mOuterIsComplete = false
+  @volatile
   private[this] var mInnerIsComplete = false
 
   override def subscribe[U >: T](g: Subscriber[U]): Observer = underlying.subscribe(new Subscriber[Event[T]] {
     def onNext(aObj: Event[T]): Unit = {
-      mLastObserver.foreach(_.dispose())
-      mInnerIsComplete = false
-      val tNewObserver = aObj.subscribe(new Subscriber[U] {
-        def onNext(a: U) = g.onNext(a)
-        def onComplete(): Unit = {
-          mInnerIsComplete = true
-          if (mInnerIsComplete && mOuterIsComplete) {
-            g.onComplete()
+      mSync.synchronized {
+        mLastObserver.foreach(_.dispose())
+        mInnerIsComplete = false
+        val tNewObserver = aObj.subscribe(new Subscriber[U] {
+          def onNext(a: U) = g.onNext(a)
+          def onComplete(): Unit = {
+            mInnerIsComplete = true
+            if (mInnerIsComplete && mOuterIsComplete) {
+              g.onComplete()
+            }
           }
-        }
-        def onFailure(aCause: Throwable): Unit = g.onFailure(aCause)
-      })
+          def onFailure(aCause: Throwable): Unit = g.onFailure(aCause)
+        })
 
-      mLastObserver = Some(tNewObserver)
+        mLastObserver = Some(tNewObserver)
+      }
     }
 
     def onComplete(): Unit = {
@@ -170,6 +175,7 @@ case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, 
   private[this] val QUEUE_SIZE = 1024
   @volatile
   private[this] var mIsAvailable = true
+  private[this] val mSync = new AnyRef
 
   override def subscribe[U >: (L, R)](f: Subscriber[U]): Observer = {
     val tLeftQueue = new ArrayBlockingQueue[L](QUEUE_SIZE)
@@ -187,8 +193,13 @@ case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, 
       }
 
       override def onComplete() = {
-        if (mIsAvailable) {
+        val tIsAvailable = mSync.synchronized {
+          val tActual = mIsAvailable
           mIsAvailable = false
+          tActual
+        }
+
+        if (tIsAvailable) {
           f.onComplete()
         }
       }
@@ -205,8 +216,13 @@ case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, 
       }
 
       override def onComplete() = {
-        if (mIsAvailable) {
+        val tIsAvailable = mSync.synchronized {
+          val tActual = mIsAvailable
           mIsAvailable = false
+          tActual
+        }
+
+        if (tIsAvailable) {
           f.onComplete()
         }
       }
@@ -228,17 +244,28 @@ case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, 
 case class TakedEvent[T](underlying: Event[T], p: T => Boolean) extends Event[T] {
   @volatile
   private[this] var mIsAvailable = true
+  private[this] val mSync = new AnyRef
 
-  override def subscribe[U >: T](f: Subscriber[U]): Observer = underlying.subscribe(t =>
+  private def setAvailable(aNew: => Boolean): Boolean = mSync.synchronized {
+    val tLast = mIsAvailable
     if (mIsAvailable) {
-      mIsAvailable = p(t)
+      mIsAvailable = aNew
+    }
+    tLast
+  }
+
+  override def subscribe[U >: T](f: Subscriber[U]): Observer = underlying.subscribe(t => {
+    val tLastIsAvailable = setAvailable(p(t))
+
+    if (tLastIsAvailable) {
       if (mIsAvailable) {
         f(t)
       } else {
         f.onComplete()
       }
-    },
-    aOnComplete = () => if (mIsAvailable) { mIsAvailable = false; f.onComplete() },
+    }
+  },
+    aOnComplete = () => if (setAvailable(false)) { f.onComplete() },
     aOnFailure = f.onFailure)
 }
 
@@ -246,31 +273,48 @@ case class SlidingEvent[T](underlying: Event[T], aSize: Int, aStep: Int) extends
   require(0 < aSize)
   require(0 < aStep)
 
+  private[this] val mSync = new AnyRef
+
   override def subscribe[U >: List[T]](f: Subscriber[U]): Observer = {
     val tBuffer = ArrayBuffer[T]()
     var tCurrentStep = -aSize
     underlying.subscribe(DelegateSubscriber[T](f) { t =>
-      tBuffer += t
-      tCurrentStep += 1
-      if (0 <= tCurrentStep && tCurrentStep % aStep == 0 && aSize <= tBuffer.size) {
-        tBuffer.trimStart(tBuffer.size - aSize)
-        f(tBuffer.toList)
-        tCurrentStep = 0
+      val tList = mSync.synchronized {
+        tBuffer += t
+        tCurrentStep += 1
+        if (0 <= tCurrentStep && tCurrentStep % aStep == 0 && aSize <= tBuffer.size) {
+          tBuffer.trimStart(tBuffer.size - aSize)
+          tCurrentStep = 0
+          Some(tBuffer.toList)
+        } else {
+          None
+        }
       }
+
+      tList.foreach(f.onNext)
     })
   }
 }
 case class GroupedEvent[T](underlying: Event[T], aSize: Int) extends Event[List[T]] {
   require(0 < aSize)
 
+  private[this] val mSync = new AnyRef
+
   override def subscribe[U >: List[T]](f: Subscriber[U]): Observer = {
     val tBuffer = ArrayBuffer[T]()
     underlying.subscribe(DelegateSubscriber[T](f) { t =>
-      tBuffer += t
-      if (tBuffer.size == aSize) {
-        f(tBuffer.toList)
-        tBuffer.clear()
+      val tList = mSync.synchronized {
+        tBuffer += t
+        if (tBuffer.size == aSize) {
+          val tResult = Some(tBuffer.toList)
+          tBuffer.clear()
+          tResult
+        } else {
+          None
+        }
       }
+
+      tList.foreach(f.onNext)
     })
   }
 }
