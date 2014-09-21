@@ -2,6 +2,9 @@ package jp.seraphr.event
 
 import scala.collection.mutable.ArrayBuffer
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * イベントを表す何か。
@@ -30,10 +33,10 @@ trait Event[+T] {
   def take(aSize: Int): Event[T] = {
     require(0 < aSize)
 
-    var tRemain = aSize
+    val tAtomicRemain = new AtomicInteger(aSize)
     val p: T => Boolean = t => {
-      tRemain -= 1
-      0 <= tRemain
+      val tRemain = tAtomicRemain.getAndDecrement()
+      0 < tRemain
     }
 
     takeWhile(p)
@@ -57,36 +60,31 @@ case class MappedEvent[S, T](underlying: Event[S], f: S => T) extends Event[T] {
 }
 
 case class FlattenEvent[T](underlying: Event[Event[T]]) extends Event[T] {
-  private[this] val mSync = new AnyRef
-  private[this] var mLastObserver: Option[Observer] = None
-  @volatile
-  private[this] var mOuterIsComplete = false
-  @volatile
-  private[this] var mInnerIsComplete = false
+  private[this] val mLastObserver = new AtomicReference(None: Option[Observer])
+  private[this] val mOuterIsComplete = new AtomicBoolean(false)
+  private[this] val mInnerIsComplete = new AtomicBoolean(false)
 
   override def subscribe[U >: T](g: Subscriber[U]): Observer = underlying.subscribe(new Subscriber[Event[T]] {
     def onNext(aObj: Event[T]): Unit = {
-      mSync.synchronized {
-        mLastObserver.foreach(_.dispose())
-        mInnerIsComplete = false
-        val tNewObserver = aObj.subscribe(new Subscriber[U] {
-          def onNext(a: U) = g.onNext(a)
-          def onComplete(): Unit = {
-            mInnerIsComplete = true
-            if (mInnerIsComplete && mOuterIsComplete) {
-              g.onComplete()
-            }
+      mInnerIsComplete.set(false)
+      val tNewObserver = aObj.subscribe(new Subscriber[U] {
+        def onNext(a: U) = g.onNext(a)
+        def onComplete(): Unit = {
+          mInnerIsComplete.set(true)
+          if (mInnerIsComplete.get && mOuterIsComplete.get) {
+            g.onComplete()
           }
-          def onFailure(aCause: Throwable): Unit = g.onFailure(aCause)
-        })
+        }
+        def onFailure(aCause: Throwable): Unit = g.onFailure(aCause)
+      })
 
-        mLastObserver = Some(tNewObserver)
-      }
+      mLastObserver.getAndSet(Some(tNewObserver)).foreach(_.dispose())
+
     }
 
     def onComplete(): Unit = {
-      mOuterIsComplete = true
-      if (mInnerIsComplete && mOuterIsComplete) {
+      mOuterIsComplete.set(true)
+      if (mInnerIsComplete.get && mOuterIsComplete.get) {
         g.onComplete()
       }
     }
@@ -173,8 +171,7 @@ case class MergedEvent[T](e1: Event[T], e2: Event[T]) extends Event[T] {
 case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, R)] {
   import java.util.{ Queue => JQueue }
   private[this] val QUEUE_SIZE = 1024
-  @volatile
-  private[this] var mIsAvailable = true
+  private[this] val mIsAvailable = new AtomicBoolean(true)
   private[this] val mSync = new AnyRef
 
   override def subscribe[U >: (L, R)](f: Subscriber[U]): Observer = {
@@ -187,19 +184,13 @@ case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, 
         if (tLeftQueue.offer(aObj)) {
           tOnEnqueue()
         } else {
-          mIsAvailable = false
-          f.onFailure(new RuntimeException("Left Queue is Full"))
+          if (mIsAvailable.getAndSet(false))
+            f.onFailure(new RuntimeException("Left Queue is Full"))
         }
       }
 
       override def onComplete() = {
-        val tIsAvailable = mSync.synchronized {
-          val tActual = mIsAvailable
-          mIsAvailable = false
-          tActual
-        }
-
-        if (tIsAvailable) {
+        if (mIsAvailable.getAndSet(false)) {
           f.onComplete()
         }
       }
@@ -210,19 +201,13 @@ case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, 
         if (tRightQueue.offer(aObj)) {
           tOnEnqueue()
         } else {
-          mIsAvailable = false
-          f.onFailure(new RuntimeException("Right Queue is Full"))
+          if (mIsAvailable.getAndSet(false))
+            f.onFailure(new RuntimeException("Right Queue is Full"))
         }
       }
 
       override def onComplete() = {
-        val tIsAvailable = mSync.synchronized {
-          val tActual = mIsAvailable
-          mIsAvailable = false
-          tActual
-        }
-
-        if (tIsAvailable) {
+        if (mIsAvailable.getAndSet(false)) {
           f.onComplete()
         }
       }
@@ -232,7 +217,7 @@ case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, 
   private def onEnqueue[U >: (L, R)](aLeftQueue: JQueue[L], aRightQueue: JQueue[R], f: Subscriber[U]) = () => {
     val tLeftHead = Option(aLeftQueue.peek())
     val tRightHead = Option(aRightQueue.peek())
-    if (tLeftHead.isDefined && tRightHead.isDefined && mIsAvailable) {
+    if (tLeftHead.isDefined && tRightHead.isDefined && mIsAvailable.get) {
       aLeftQueue.poll()
       aRightQueue.poll()
 
@@ -242,26 +227,21 @@ case class ZippedEvent[L, R](left: Event[L], right: Event[R]) extends Event[(L, 
 }
 
 case class TakedEvent[T](underlying: Event[T], p: T => Boolean) extends Event[T] {
-  @volatile
-  private[this] var mIsAvailable = true
-  private[this] val mSync = new AnyRef
+  private[this] val mIsAvailable = new AtomicBoolean(true)
 
-  private def setAvailable(aNew: => Boolean): Boolean = mSync.synchronized {
-    val tLast = mIsAvailable
-    if (mIsAvailable) {
-      mIsAvailable = aNew
-    }
-    tLast
-  }
+  private def setAvailable(aNew: => Boolean): Boolean = mIsAvailable.getAndSet(aNew)
 
   override def subscribe[U >: T](f: Subscriber[U]): Observer = underlying.subscribe(t => {
-    val tLastIsAvailable = setAvailable(p(t))
+    if (mIsAvailable.get) {
+      val tNewValue = p(t)
+      val tLastIsAvailable = setAvailable(tNewValue)
 
-    if (tLastIsAvailable) {
-      if (mIsAvailable) {
-        f(t)
-      } else {
-        f.onComplete()
+      if (tLastIsAvailable) {
+        if (tNewValue) {
+          f(t)
+        } else {
+          f.onComplete()
+        }
       }
     }
   },
